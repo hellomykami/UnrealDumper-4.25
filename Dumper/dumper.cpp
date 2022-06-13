@@ -91,7 +91,7 @@ STATUS Dumper::Dump() {
     if (!file) { return STATUS::FILE_NOT_OPEN; }
     size_t size = 0;
     NamePoolData.Dump([&file, &size](std::string_view name, uint32_t id) {
-      fmt::print(file, "[{:0>6}] {}\n", id, name);
+      fmt::print(file, "[{:0>6}] {}\n", id, name.data());
       size++;
     });
     fmt::print("Names: {}\n", size);

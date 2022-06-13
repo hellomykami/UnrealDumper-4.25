@@ -1,6 +1,8 @@
 #pragma once
 #include "generic.h"
 #include <filesystem>
+#include <locale>
+#include <codecvt>
 #undef GetObject
 
 namespace fs = std::filesystem;
@@ -11,8 +13,11 @@ private:
   FILE* file;
 
 public:
-  File(fs::path path, const char *mode) {
-    fopen_s(&file, path.string().c_str(), mode);
+  File(fs::path path, const char* mode) {
+	  fopen_s(&file, path.string().c_str(), mode);
+  }
+  File(fs::path path, const wchar_t* mode) {
+	  auto err = _wfopen_s(&file, path.wstring().c_str(), mode);
   }
   ~File() {
     if (file) {
@@ -38,7 +43,7 @@ public:
   // Gets string out of array unit
   std::string String(bool wide, uint16 len) const;
   // Gets string out of array unit
-  void String(char *buf, bool wide, uint16 len) const;
+  size_t String(std::string& buf, bool wide, uint16 len) const;
   std::string String() const;
   // Calculates the unit size depending on 'offsets.FNameEntry' and information
   // about string
@@ -52,6 +57,7 @@ protected:
 public:
   UE_FName(uint8 *object) : object(object) {}
   UE_FName() : object(nullptr) {}
+  std::string GetName(bool& bWide) const;
   std::string GetName() const;
 };
 
@@ -106,6 +112,7 @@ public:
   UE_UObject GetOuter() const;
   UE_UObject GetPackageObject() const;
   std::string GetName() const;
+  std::string GetName(bool& bWide) const;
   std::string GetFullName() const;
   std::string GetCppName() const;
   void* GetAddress() const { return object; }

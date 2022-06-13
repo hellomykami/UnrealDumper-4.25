@@ -14,25 +14,26 @@ std::pair<bool, uint16> UE_FNameEntry::Info() const {
 }
 
 std::string UE_FNameEntry::String(bool wide, uint16 len) const {
-  std::string name("\x0", len);
-  String(name.data(), wide, len);
+  std::string name("\x0", (wide ? 2 * len : len));
+  String(name, wide, len);
   return name;
 }
 
-void UE_FNameEntry::String(char *buf, bool wide, uint16 len) const {
+size_t UE_FNameEntry::String(std::string& buf, bool wide, uint16 len) const {
   if (wide) {
     wchar_t wbuf[1024]{};
     Read(object + offsets.FNameEntry.HeaderSize, wbuf, len * 2ull);
     /*if (Decrypt_WIDE) { Decrypt_WIDE(wbuf, len); }*/
-    auto copied = WideCharToMultiByte(CP_UTF8, 0, wbuf, len, buf, len, 0, 0);
-    if (copied == 0) {
-      buf[0] = '\x0';
-    }
+    buf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(wbuf));
+    return buf.size();
   } else {
-    Read(object + offsets.FNameEntry.HeaderSize, buf, len);
+    char tmpBuf[1024]{};
+    Read(object + offsets.FNameEntry.HeaderSize, tmpBuf, len);
     if (Decrypt_ANSI) {
-      Decrypt_ANSI(buf, len);
+      Decrypt_ANSI(tmpBuf, len);
     }
+    buf.assign(tmpBuf);
+    return 0;
   }
 }
 
@@ -47,20 +48,27 @@ uint16 UE_FNameEntry::Size(bool wide, uint16 len) {
 }
 
 std::string UE_FName::GetName() const {
-  uint32 index = Read<uint32>(object);
-  auto entry = UE_FNameEntry(NamePoolData.GetEntry(index));
-  if (!entry) return std::string();
-  auto [wide, len] = entry.Info();
-  auto name = entry.String(wide, len);
-  uint32 number = Read<uint32>(object + offsets.FName.Number);
-  if (number > 0) {
-    name += '_' + std::to_string(number);
-  }
-  auto pos = name.rfind('/');
-  if (pos != std::string::npos) {
-    name = name.substr(pos + 1);
-  }
-  return name;
+  auto out = false;
+  return GetName(out);
+}
+
+std::string UE_FName::GetName(bool& bWide) const
+{
+	uint32 index = Read<uint32>(object);
+	auto entry = UE_FNameEntry(NamePoolData.GetEntry(index));
+	if (!entry) return std::string();
+	auto [wide, len] = entry.Info();
+	auto name = entry.String(wide, len);
+	uint32 number = Read<uint32>(object + offsets.FName.Number);
+	if (number > 0) {
+		name += '_' + std::to_string(number);
+	}
+	auto pos = name.rfind('/');
+	if (pos != std::string::npos) {
+		name = name.substr(pos + 1);
+	}
+    bWide = wide;
+	return name;
 }
 
 uint32 UE_UObject::GetIndex() const {
@@ -86,6 +94,12 @@ UE_UObject UE_UObject::GetPackageObject() const {
 std::string UE_UObject::GetName() const {
   auto fname = UE_FName(object + offsets.UObject.Name);
   return fname.GetName();
+}
+
+std::string UE_UObject::GetName(bool& bWide) const
+{
+	auto fname = UE_FName(object + offsets.UObject.Name);
+	return fname.GetName(bWide);
 }
 
 std::string UE_UObject::GetFullName() const {
@@ -1292,46 +1306,95 @@ bool UE_UPackage::Save(const fs::path &dir, bool spacing) {
     return false;
   }
 
-  std::string packageName = GetObject().GetName();
-
+  auto wide = false;
+  std::string packageName = GetObject().GetName(wide);
+  auto wPackageName = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(packageName);
   char chars[] = "/\\:*?\"<>|";
-  for (auto c : chars) {
-    auto pos = packageName.find(c);
-    if (pos != std::string::npos) {
-      packageName[pos] = '_';
-    }
+  if(!wide)
+  {
+	  for (auto c : chars) {
+		  auto pos = packageName.find(c);
+		  if (pos != std::string::npos) {
+			  packageName[pos] = '_';
+		  }
+	  }
+
+	  if (Classes.size()) {
+		  File file(dir / (packageName + "_classes.h"), "w");
+		  if (!file) {
+			  return false;
+		  }
+		  if (spacing) {
+			  UE_UPackage::SaveStructSpacing(Classes, file);
+		  }
+		  else {
+			  UE_UPackage::SaveStruct(Classes, file);
+		  }
+	  }
+
+	  if (Structures.size() || Enums.size()) {
+		  File file(dir / (packageName + "_struct.h"), "w");
+		  if (!file) {
+			  return false;
+		  }
+
+		  if (Enums.size()) {
+			  UE_UPackage::SaveEnum(Enums, file);
+		  }
+
+		  if (Structures.size()) {
+			  if (spacing) {
+				  UE_UPackage::SaveStructSpacing(Structures, file);
+			  }
+			  else {
+				  UE_UPackage::SaveStruct(Structures, file);
+			  }
+		  }
+	  }
+  }
+  else
+  {
+	  for (auto c : chars) {
+		  auto pos = wPackageName.find(c);
+		  if (pos != std::wstring::npos) {
+              wPackageName[pos] = '_';
+		  }
+	  }
+
+	  if (Classes.size()) {
+		  File file(dir / (wPackageName + L"_classes.h"), L"w");
+		  if (!file) {
+			  return false;
+		  }
+		  if (spacing) {
+			  UE_UPackage::SaveStructSpacing(Classes, file);
+		  }
+		  else {
+			  UE_UPackage::SaveStruct(Classes, file);
+		  }
+	  }
+
+	  if (Structures.size() || Enums.size()) {
+		  File file(dir / (wPackageName + L"_struct.h"), L"w");
+		  if (!file) {
+			  return false;
+		  }
+
+		  if (Enums.size()) {
+			  UE_UPackage::SaveEnum(Enums, file);
+		  }
+
+		  if (Structures.size()) {
+			  if (spacing) {
+				  UE_UPackage::SaveStructSpacing(Structures, file);
+			  }
+			  else {
+				  UE_UPackage::SaveStruct(Structures, file);
+			  }
+		  }
+	  }
   }
 
-  if (Classes.size()) {
-    File file(dir / (packageName + "_classes.h"), "w");
-    if (!file) {
-      return false;
-    }
-    if (spacing) {
-      UE_UPackage::SaveStructSpacing(Classes, file);
-    } else {
-      UE_UPackage::SaveStruct(Classes, file);
-    }
-  }
-
-  if (Structures.size() || Enums.size()) {
-    File file(dir / (packageName + "_struct.h"), "w");
-    if (!file) {
-      return false;
-    }
-
-    if (Enums.size()) {
-      UE_UPackage::SaveEnum(Enums, file);
-    }
-
-    if (Structures.size()) {
-      if (spacing) {
-        UE_UPackage::SaveStructSpacing(Structures, file);
-      } else {
-        UE_UPackage::SaveStruct(Structures, file);
-      }
-    }
-  }
 
   return true;
 }
